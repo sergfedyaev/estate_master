@@ -1,0 +1,46 @@
+name: Deploy to lokipaw.com
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: |
+            ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Rsync code to server
+        run: |
+          RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
+          rsync -az --delete $RSYNC_EXCLUDES ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_DIR }}
+
+      - name: Rebuild & restart containers
+        run: |
+          ssh -p "${{ secrets.SSH_PORT }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} '
+            set -e
+            cd "${{ secrets.DEPLOY_DIR }}"
+            # убедимся, что .env.prod есть (у нас уже он есть)
+            [ -f .env.prod ] || (echo ".env.prod отсутствует!" && exit 1)
+            ln -sf .env.prod .env
+
+            # Поднять/пересобрать
+            docker compose down
+            docker compose up -d --build
+
+            # быстрый health‑check
+            curl -I --max-time 5 http://127.0.0.1:8000/ || true
+          '

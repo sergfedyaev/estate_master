@@ -2,45 +2,40 @@ name: Deploy to lokipaw.com
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.9.0
+      - name: Start ssh-agent
+        uses: actions/ssh-agent@v0.9.1
         with:
-          ssh-private-key: |
-            ${{ secrets.SSH_PRIVATE_KEY }}
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}   # твой приватный ключ
 
-      - name: Add known_hosts
+      - name: Trust lokipaw.com host key
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H lokipaw.com >> ~/.ssh/known_hosts
 
-      - name: Rsync code to server
+      - name: Rsync project to server
+        env:
+          RSYNC_EXCLUDES: "--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
         run: |
-          RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
-          rsync -az --delete $RSYNC_EXCLUDES ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_DIR }}
+          set -eux
+          # <<< ВАЖНО: укажи ПРАВИЛЬНЫЙ путь на сервере >>>
+          RSYNC_DEST="feda@lokipaw.com:/home/feda/docker/estate_master/"
+          rsync -az --delete $RSYNC_EXCLUDES ./ "$RSYNC_DEST"
 
-      - name: Rebuild & restart containers
+      - name: Rebuild & restart on server
         run: |
-          ssh -p "${{ secrets.SSH_PORT }}" ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} '
-            set -e
-            cd "${{ secrets.DEPLOY_DIR }}"
-            # убедимся, что .env.prod есть (у нас уже он есть)
-            [ -f .env.prod ] || (echo ".env.prod отсутствует!" && exit 1)
-            ln -sf .env.prod .env
-
-            # Поднять/пересобрать
-            docker compose down
+          set -eux
+          ssh feda@lokipaw.com '
+            cd ~/docker/estate_master &&
+            docker compose down &&
             docker compose up -d --build
-
-            # быстрый health‑check
-            curl -I --max-time 5 http://127.0.0.1:8000/ || true
           '

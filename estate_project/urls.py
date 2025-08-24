@@ -1,11 +1,9 @@
+# estate_project/urls.py
 from django.contrib import admin
 from django.urls import path
-from django.http import HttpResponse
-
-def home(_): 
-    return HttpResponse("OK")
+from django.views.generic import TemplateView  # ← добавили
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("", home),
+    path("", TemplateView.as_view(template_name="index.html"), name="home"),  # ← это рендерит index.html
 ]

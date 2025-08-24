@@ -18,10 +18,11 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}        # lokipaw.com
-      SSH_PORT: ${{ secrets.SSH_PORT }}        # 22022
-      SSH_USER: ${{ secrets.SSH_USER }}        # feda
-      DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}    # /home/feda/docker/estate_master
+      SSH_HOST:        ${{ secrets.SSH_HOST }}        # lokipaw.com
+      SSH_PORT:        ${{ secrets.SSH_PORT }}        # 22022
+      SSH_USER:        ${{ secrets.SSH_USER }}        # feda
+      DEPLOY_DIR:      ${{ secrets.DEPLOY_DIR }}      # /home/feda/docker/estate_master
+      RSYNC_EXCLUDES:  "--exclude=.git/ --exclude=pgdata/ --exclude=media/ --exclude=staticfiles/"
 
     steps:
       - name: Checkout repo
@@ -33,32 +34,24 @@ jobs:
       - name: Start ssh-agent and add key
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}   # ПРИВАТНЫЙ ключ с Mac (~/.ssh/estate_ci_key)
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Add server host key to known_hosts
+      - name: Ensure deploy dir exists
         run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "mkdir -p '$DEPLOY_DIR' && chown -R $SSH_USER:$SSH_USER '$DEPLOY_DIR'"
 
-      - name: Rsync sources to server (force publickey, verbose)
+      - name: Rsync sources to server
         run: |
-          set -euo pipefail
-          RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
-          SSH_OPTS="-p $SSH_PORT -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes -o StrictHostKeyChecking=accept-new -vvv"
-          rsync -az $RSYNC_EXCLUDES -e "ssh $SSH_OPTS" ./ "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/"
+          rsync -az --delete $RSYNC_EXCLUDES \
+            -e "ssh -p $SSH_PORT -o StrictHostKeyChecking=no" \
+            ./ "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/"
 
-      - name: Build & restart on server
+      - name: Run deploy script on server (rebuild & restart)
         run: |
-          SSH_OPTS="-p $SSH_PORT -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes -o StrictHostKeyChecking=accept-new -vvv"
-          ssh $SSH_OPTS "$SSH_USER@$SSH_HOST" bash -lc '
-            cd "$DEPLOY_DIR"
-            ln -sf .env.prod .env || true
-            docker compose down
-            docker compose up -d --build
-            docker system prune -f
-          '
-
-      - name: Smoke-check (curl)
-        run: |
-          # Проверим, что контейнер отдаёт 200/HTML
-          curl -I http://$SSH_HOST:8000/ || true
+          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
+            cd '$DEPLOY_DIR' &&
+            docker compose down &&
+            docker compose up -d --build &&
+            docker compose ps
+          "

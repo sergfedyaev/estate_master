@@ -3,7 +3,7 @@ name: Deploy to lokipaw.com
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 concurrency:
   group: deploy-main
@@ -17,10 +17,10 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}     # lokipaw.com
-      SSH_PORT: ${{ secrets.SSH_PORT }}     # 22022
-      SSH_USER: ${{ secrets.SSH_USER }}     # feda
-      DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }} # /home/feda/docker/estate_master
+      SSH_HOST: ${{ secrets.SSH_HOST }}        # lokipaw.com
+      SSH_PORT: ${{ secrets.SSH_PORT }}        # 22022
+      SSH_USER: ${{ secrets.SSH_USER }}        # feda
+      DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}    # /home/feda/docker/estate_master
 
     steps:
       - name: Checkout repo
@@ -32,7 +32,7 @@ jobs:
       - name: Start ssh-agent and add key
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}   # приватный ключ (из ~/.ssh/estate_ci_key)
 
       - name: Make sure target directory exists on server
         run: |
@@ -45,8 +45,8 @@ jobs:
         run: |
           RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
           rsync -az --delete $RSYNC_EXCLUDES \
-            -e "ssh -p $SSH_PORT -o StrictHostKeyChecking=no" \
-            ./ "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/"
+            -e \"ssh -p $SSH_PORT -o StrictHostKeyChecking=no\" \
+            ./ \"$SSH_USER@$SSH_HOST:$DEPLOY_DIR/\"
 
       - name: Ensure .env.prod and .env symlink
         run: |

@@ -40,25 +40,21 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
 
-      - name: Rsync sources to server
+      - name: Rsync sources to server (force publickey, verbose)
         run: |
           set -euo pipefail
           RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
-          rsync -az $RSYNC_EXCLUDES -e "ssh -p $SSH_PORT" ./ "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/"
+          SSH_OPTS="-p $SSH_PORT -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes -o StrictHostKeyChecking=accept-new -vvv"
+          rsync -az $RSYNC_EXCLUDES -e "ssh $SSH_OPTS" ./ "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/"
 
-      - name: Build & restart containers on server
+        - name: Build & restart on server
         run: |
-          set -euo pipefail
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" bash -lc '
+          SSH_OPTS="-p $SSH_PORT -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes -o StrictHostKeyChecking=accept-new -vvv"
+          ssh $SSH_OPTS "$SSH_USER@$SSH_HOST" bash -lc '
             cd "$DEPLOY_DIR"
-            # .env можно держать ссылкой на .env.prod
             ln -sf .env.prod .env || true
-
-            # аккуратно обновляем стек
             docker compose down
             docker compose up -d --build
-
-            # опционально: почистить висящие образы/кэш
             docker system prune -f
           '
 

@@ -10,7 +10,7 @@ jobs:
 
     env:
       SSH_HOST: lokipaw.com          # твой сервер
-      SSH_PORT: 22
+      SSH_PORT: 22022
       SSH_USER: feda                 # пользователь на сервере
       SSH_TARGET: /home/feda/docker/estate_master
 

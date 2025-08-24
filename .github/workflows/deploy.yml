@@ -57,6 +57,12 @@ jobs:
             cd '$DEPLOY_DIR'
             [ -f .env ] || ln -s .env.prod .env
           "
+    - name: Ensure .env symlink
+      run: |
+        ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
+          cd $DEPLOY_DIR
+          [ -f .env ] || ln -s .env.prod .env
+        "
 
       - name: Rebuild & restart with Docker Compose
         run: |

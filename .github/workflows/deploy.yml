@@ -17,9 +17,9 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}        # lokipaw.com
-      SSH_PORT: ${{ secrets.SSH_PORT }}        # 22022
-      SSH_USER: ${{ secrets.SSH_USER }}        # feda
+      SSH_HOST: ${{ secrets.SSH_HOST }}      # lokipaw.com
+      SSH_PORT: ${{ secrets.SSH_PORT }}      # 22022
+      SSH_USER: ${{ secrets.SSH_USER }}      # feda
       DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}    # /home/feda/docker/estate_master
 
     steps:
@@ -32,7 +32,7 @@ jobs:
       - name: Start ssh-agent and add key
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}   # приватный ключ (из ~/.ssh/estate_ci_key)
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Make sure target directory exists on server
         run: |
@@ -45,8 +45,8 @@ jobs:
         run: |
           RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
           rsync -az --delete $RSYNC_EXCLUDES \
-            -e \"ssh -p $SSH_PORT -o StrictHostKeyChecking=no\" \
-            ./ \"$SSH_USER@$SSH_HOST:$DEPLOY_DIR/\"
+            -e "ssh -p $SSH_PORT -o StrictHostKeyChecking=no" \
+            ./ "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/"
 
       - name: Ensure .env.prod and .env symlink
         run: |
@@ -54,15 +54,16 @@ jobs:
             set -e
             cd '$DEPLOY_DIR'
             if [ ! -f .env.prod ]; then
-              cat > .env.prod <<'EOF'
-DJANGO_SETTINGS_MODULE=estate_project.settings
-SECRET_KEY=please-change-me
-DEBUG=0
-ALLOWED_HOSTS=estate.lokipaw.com,localhost,127.0.0.1
-DATABASE_URL=postgres://estate_user:estate_pass@db:5432/estate_prod
-POSTGRES_DB=estate_prod
-POSTGRES_USER=estate_user
-EOF
+              # Using printf is more robust than a heredoc inside YAML
+              printf '%s\\n' \
+                'DJANGO_SETTINGS_MODULE=estate_project.settings' \
+                'SECRET_KEY=please-change-me' \
+                'DEBUG=0' \
+                'ALLOWED_HOSTS=estate.lokipaw.com,localhost,127.0.0.1' \
+                'DATABASE_URL=postgres://estate_user:estate_pass@db:5432/estate_prod' \
+                'POSTGRES_DB=estate_prod' \
+                'POSTGRES_USER=estate_user' \
+                > .env.prod
             fi
             [ -e .env ] || ln -s .env.prod .env
           "

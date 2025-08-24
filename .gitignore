@@ -1,0 +1,22 @@
+# Python / Django
+__pycache__/
+*.py[cod]
+*.sqlite3
+db.sqlite3
+
+# Django static/media
+static_root/
+media/
+
+# Envs
+.env
+.env.* 
+
+# Docker/Postgres
+pgdata/
+*.log
+
+# OS/IDE
+.DS_Store
+.idea/
+.vscode/

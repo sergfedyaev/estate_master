@@ -1,41 +1,48 @@
-name: Deploy to lokipaw.com
+name: deploy
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+
+    env:
+      SSH_HOST: lokipaw.com
+      SSH_PORT: 22
+      SSH_USER: feda
+      SSH_TARGET: /home/feda/docker/estate_master
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Start ssh-agent
-        uses: actions/ssh-agent@v0.9.1
+      - name: Start ssh-agent and add key
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}   # твой приватный ключ
+          ssh-private-key: |
+            ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Trust lokipaw.com host key
+      - name: Add server to known_hosts
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H lokipaw.com >> ~/.ssh/known_hosts
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
 
-      - name: Rsync project to server
-        env:
-          RSYNC_EXCLUDES: "--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
+      - name: Rsync sources to server
         run: |
-          set -eux
-          # <<< ВАЖНО: укажи ПРАВИЛЬНЫЙ путь на сервере >>>
-          RSYNC_DEST="feda@lokipaw.com:/home/feda/docker/estate_master/"
-          rsync -az --delete $RSYNC_EXCLUDES ./ "$RSYNC_DEST"
+          RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
+          rsync -az --delete $RSYNC_EXCLUDES \
+            -e "ssh -p $SSH_PORT" \
+            ./ "${SSH_USER}@${SSH_HOST}:${SSH_TARGET}/"
 
-      - name: Rebuild & restart on server
+      - name: Build & restart containers on server
         run: |
-          set -eux
-          ssh feda@lokipaw.com '
-            cd ~/docker/estate_master &&
-            docker compose down &&
+          ssh -p "$SSH_PORT" "${SSH_USER}@${SSH_HOST}" bash -lc '
+            set -e
+            cd ~/docker/estate_master
+            docker compose down
             docker compose up -d --build
+            docker compose ps
           '

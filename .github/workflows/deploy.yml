@@ -2,17 +2,16 @@ name: deploy
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   deploy:
     runs-on: ubuntu-24.04
 
     env:
-      SSH_HOST: lokipaw.com
+      SSH_HOST: lokipaw.com          # твой сервер
       SSH_PORT: 22
-      SSH_USER: feda
+      SSH_USER: feda                 # пользователь на сервере
       SSH_TARGET: /home/feda/docker/estate_master
 
     steps:
@@ -25,21 +24,18 @@ jobs:
           ssh-private-key: |
             ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Add server to known_hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+      # Никаких known_hosts и mkdir ~/.ssh — не нужны
 
       - name: Rsync sources to server
         run: |
           RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
           rsync -az --delete $RSYNC_EXCLUDES \
-            -e "ssh -p $SSH_PORT" \
+            -e "ssh -p $SSH_PORT -o StrictHostKeyChecking=no" \
             ./ "${SSH_USER}@${SSH_HOST}:${SSH_TARGET}/"
 
       - name: Build & restart containers on server
         run: |
-          ssh -p "$SSH_PORT" "${SSH_USER}@${SSH_HOST}" bash -lc '
+          ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" bash -lc '
             set -e
             cd ~/docker/estate_master
             docker compose down

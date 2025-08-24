@@ -1,44 +1,10 @@
-name: deploy
+- name: Start ssh-agent and add key
+  uses: webfactory/ssh-agent@v0.9.0
+  with:
+    ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-on:
-  push:
-    branches: [main]
-
-jobs:
-  deploy:
-    runs-on: ubuntu-24.04
-
-    env:
-      SSH_HOST: lokipaw.com          # твой сервер
-      SSH_PORT: 22022
-      SSH_USER: feda                 # пользователь на сервере
-      SSH_TARGET: /home/feda/docker/estate_master
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Start ssh-agent and add key
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: |
-            ${{ secrets.SSH_PRIVATE_KEY }}
-
-      # Никаких known_hosts и mkdir ~/.ssh — не нужны
-
-      - name: Rsync sources to server
-        run: |
-          RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
-          rsync -az --delete $RSYNC_EXCLUDES \
-            -e "ssh -p $SSH_PORT -o StrictHostKeyChecking=no" \
-            ./ "${SSH_USER}@${SSH_HOST}:${SSH_TARGET}/"
-
-      - name: Build & restart containers on server
-        run: |
-          ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" bash -lc '
-            set -e
-            cd ~/docker/estate_master
-            docker compose down
-            docker compose up -d --build
-            docker compose ps
-          '
+- name: Rsync sources to server
+  run: |
+    RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
+    rsync -az -e "ssh -p ${{ secrets.SSH_PORT }}" $RSYNC_EXCLUDES ./ \
+      ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_DIR }}

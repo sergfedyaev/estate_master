@@ -82,6 +82,25 @@ jobs:
             -e "ssh -p $SSH_PORT -o StrictHostKeyChecking=no" \
             ./ "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/"
 
+      - name: Ensure .env.prod exists on server
+        run: |
+          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
+            set -e
+            cd '$DEPLOY_DIR'
+            if [ ! -f .env.prod ]; then
+              # Using printf is more robust than a heredoc inside YAML
+              printf '%s\\n' \
+                'DJANGO_SETTINGS_MODULE=estate_project.settings' \
+                'SECRET_KEY=please-change-me' \
+                'DEBUG=0' \
+                'ALLOWED_HOSTS=estate.lokipaw.com,localhost,127.0.0.1' \
+                'DATABASE_URL=postgres://estate_user:estate_pass@db:5432/estate_prod' \
+                'POSTGRES_DB=estate_prod' \
+                'POSTGRES_USER=estate_user' \
+                > .env.prod
+            fi
+          "
+
       - name: Rebuild & restart with Docker Compose
         run: |
           ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "

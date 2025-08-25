@@ -5,23 +5,17 @@ on:
     branches: [ main ]
   workflow_dispatch: {}
 
-concurrency:
-  group: deploy-main
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
 jobs:
   deploy:
-    name: Deploy
     runs-on: ubuntu-24.04
-    if: github.ref == 'refs/heads/main'
     env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}       # lokipaw.com
-      SSH_PORT: ${{ secrets.SSH_PORT }}       # 22022
-      SSH_USER: ${{ secrets.SSH_USER }}       # feda
-      DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}   # /home/feda/docker/estate_master
+      SSH_HOST: ${{ secrets.SSH_HOST }}      # lokipaw.com
+      SSH_PORT: ${{ secrets.SSH_PORT }}      # 22022
+      SSH_USER: ${{ secrets.SSH_USER }}      # feda
+      DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}  # /home/feda/docker/estate_master
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -31,12 +25,9 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Make sure target directory exists
+      - name: Make sure target dir exists
         run: |
-          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
-            set -e
-            mkdir -p '$DEPLOY_DIR'
-          "
+          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_DIR'"
 
       - name: Rsync sources to server
         env:
@@ -48,14 +39,15 @@ jobs:
 
       - name: Rebuild & restart with Docker Compose
         run: |
-          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
+          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" '
             set -e
-            cd '$DEPLOY_DIR'
+            cd "$DEPLOY_DIR"
 
-            # на всякий случай убираем env_file из compose, чтобы не конфликтовал с --env-file
-            sed -i '/env_file: .env/d' docker-compose.yml || true
+            # .env.prod ОБЯЗАТЕЛЕН. Если нет — выходим с понятной ошибкой.
+            [ -f .env.prod ] || { echo ".env.prod not found in $DEPLOY_DIR"; exit 1; }
 
+            # не полагаться на env_file в compose — пробрасываем явно
             docker compose --env-file .env.prod down || true
             docker compose --env-file .env.prod up -d --build
             docker compose --env-file .env.prod ps
-          "
+          '

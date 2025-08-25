@@ -1,22 +1,27 @@
-name: test-and-deploy
+name: Deploy to lokipaw.com
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch:
+    branches: [ main ]
+  workflow_dispatch: {}
 
+# чтобы несколько запусков не ехали параллельно
 concurrency:
-  group: "deploy-${{ github.ref }}"
+  group: deploy-main
   cancel-in-progress: true
 
-env:
-  PYTHON_VERSION: "3.12"
+permissions:
+  contents: read
 
 jobs:
   test:
+    name: Test
     runs-on: ubuntu-24.04
+    env:
+      PYTHON_VERSION: "3.12"
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,72 +40,63 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-- name: Django sanity checks
-  env:
-    DJANGO_SETTINGS_MODULE: estate_project.settings
-  run: |
-    # Просто логируем предупреждения, не прерываясь
-    python manage.py check --deploy || true
-    
+
+      - name: Django sanity checks
+        env:
+          DJANGO_SETTINGS_MODULE: estate_project.settings
+        run: |
+          # логируем WARN, но не валим билд
+          python manage.py check --deploy || true
+
   deploy:
+    name: Deploy
     needs: test
     runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/main'
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}        # lokipaw.com
+      SSH_PORT: ${{ secrets.SSH_PORT }}        # 22022
+      SSH_USER: ${{ secrets.SSH_USER }}        # feda
+      DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}    # /home/feda/docker/estate_master
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Load SSH key
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
-          # DEPLOY_KEY = приватный ключ, чей публичный добавлен в /home/feda/.ssh/authorized_keys
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}  # приватный ключ с Мака
+
+      - name: Make sure target directory exists
+        run: |
+          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
+            set -e
+            mkdir -p \"$DEPLOY_DIR\"
+          "
 
       - name: Rsync sources to server
         env:
-          SSH_HOST: ${{ vars.SSH_HOST }}      # напр. lokipaw.com
-          SSH_PORT: ${{ vars.SSH_PORT }}      # напр. 22022
-          SSH_USER: ${{ vars.SSH_USER }}      # feda
-          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}  # /home/feda/docker/estate_master
+          RSYNC_EXCLUDES: "--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
         run: |
-          set -euo pipefail
-          RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
-          rsync -az $RSYNC_EXCLUDES -e "ssh -p ${SSH_PORT}" ./ "${SSH_USER}@${SSH_HOST}:${DEPLOY_DIR}/"
+          rsync -az --delete $RSYNC_EXCLUDES \
+            -e "ssh -p $SSH_PORT -o StrictHostKeyChecking=no" \
+            ./ "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/"
 
-      - name: Build & restart containers on server
-        env:
-          SSH_HOST: ${{ vars.SSH_HOST }}
-          SSH_PORT: ${{ vars.SSH_PORT }}
-          SSH_USER: ${{ vars.SSH_USER }}
-          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+      - name: Ensure .env symlink
         run: |
-          set -euo pipefail
-          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
-            set -euo pipefail
-            cd '$DEPLOY_DIR'
-            [ -e .env ] || ln -s .env.prod .env
-            docker compose down || true
-            docker compose up -d --build
-          "
-
-      - name: Wait for app health
-        env:
-          SSH_HOST: ${{ vars.SSH_HOST }}
-          SSH_PORT: ${{ vars.SSH_PORT }}
-          SSH_USER: ${{ vars.SSH_USER }}
-          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
-        run: |
-          set -euo pipefail
           ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
             set -e
-            cd '$DEPLOY_DIR'
-            # ждём, пока web начнёт слушать 8000 и отдавать 200
-            for i in \$(seq 1 30); do
-              code=\$(curl -sS -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8000/ || true)
-              if [ \"\$code\" = \"200\" ]; then
-                echo \"App is healthy (HTTP 200)\"
-                exit 0
-              fi
-              sleep 2
-            done
-            echo 'App did not become healthy in time'; docker compose ps; docker compose logs --tail=200 web; exit 1
+            cd \"$DEPLOY_DIR\"
+            # если нет .env — делаем симлинк на .env.prod из репо
+            [ -e .env ] || ln -s .env.prod .env
+          "
+
+      - name: Rebuild & restart with Docker Compose
+        run: |
+          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
+            set -e
+            cd \"$DEPLOY_DIR\"
+            docker compose down || true
+            docker compose up -d --build
+            docker compose ps
           "

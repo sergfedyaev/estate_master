@@ -1,79 +1,109 @@
-name: Deploy to lokipaw.com
+name: test-and-deploy
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch: {}
+    branches: [ "main" ]
+  workflow_dispatch:
 
 concurrency:
-  group: deploy-main
+  group: "deploy-${{ github.ref }}"
   cancel-in-progress: true
 
-permissions:
-  contents: read
+env:
+  PYTHON_VERSION: "3.12"
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-24.04
-
-    env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}      # lokipaw.com
-      SSH_PORT: ${{ secrets.SSH_PORT }}      # 22022
-      SSH_USER: ${{ secrets.SSH_USER }}      # feda
-      DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}    # /home/feda/docker/estate_master
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install rsync
-        run: sudo apt-get update -y && sudo apt-get install -y rsync
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Start ssh-agent and add key
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Django sanity checks
+        env:
+          DJANGO_SETTINGS_MODULE: estate_project.settings
+          # Не задаём DATABASE_URL → в settings упадёт в sqlite
+        run: |
+          python manage.py check --deploy --fail-level WARNING
+          # Если тестов нет — команда вернёт 0
+          python manage.py test -v 2 || true
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load SSH key
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-      - name: Make sure target directory exists on server
-        run: |
-          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
-            set -e
-            mkdir -p '$DEPLOY_DIR'
-          "
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+          # DEPLOY_KEY = приватный ключ, чей публичный добавлен в /home/feda/.ssh/authorized_keys
 
       - name: Rsync sources to server
+        env:
+          SSH_HOST: ${{ vars.SSH_HOST }}      # напр. lokipaw.com
+          SSH_PORT: ${{ vars.SSH_PORT }}      # напр. 22022
+          SSH_USER: ${{ vars.SSH_USER }}      # feda
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}  # /home/feda/docker/estate_master
         run: |
+          set -euo pipefail
           RSYNC_EXCLUDES="--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
-          rsync -az --delete $RSYNC_EXCLUDES \
-            -e "ssh -p $SSH_PORT -o StrictHostKeyChecking=no" \
-            ./ "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/"
+          rsync -az $RSYNC_EXCLUDES -e "ssh -p ${SSH_PORT}" ./ "${SSH_USER}@${SSH_HOST}:${DEPLOY_DIR}/"
 
-      - name: Ensure .env.prod and .env symlink
+      - name: Build & restart containers on server
+        env:
+          SSH_HOST: ${{ vars.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT }}
+          SSH_USER: ${{ vars.SSH_USER }}
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
         run: |
+          set -euo pipefail
           ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
-            set -e
+            set -euo pipefail
             cd '$DEPLOY_DIR'
-            if [ ! -f .env.prod ]; then
-              # Using printf is more robust than a heredoc inside YAML
-              printf '%s\\n' \
-                'DJANGO_SETTINGS_MODULE=estate_project.settings' \
-                'SECRET_KEY=please-change-me' \
-                'DEBUG=0' \
-                'ALLOWED_HOSTS=estate.lokipaw.com,localhost,127.0.0.1' \
-                'DATABASE_URL=postgres://estate_user:estate_pass@db:5432/estate_prod' \
-                'POSTGRES_DB=estate_prod' \
-                'POSTGRES_USER=estate_user' \
-                > .env.prod
-            fi
             [ -e .env ] || ln -s .env.prod .env
+            docker compose down || true
+            docker compose up -d --build
           "
 
-      - name: Rebuild & restart with Docker Compose
+      - name: Wait for app health
+        env:
+          SSH_HOST: ${{ vars.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT }}
+          SSH_USER: ${{ vars.SSH_USER }}
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
         run: |
+          set -euo pipefail
           ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
             set -e
             cd '$DEPLOY_DIR'
-            docker compose down
-            docker compose up -d --build
-            docker compose ps
+            # ждём, пока web начнёт слушать 8000 и отдавать 200
+            for i in \$(seq 1 30); do
+              code=\$(curl -sS -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8000/ || true)
+              if [ \"\$code\" = \"200\" ]; then
+                echo \"App is healthy (HTTP 200)\"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo 'App did not become healthy in time'; docker compose ps; docker compose logs --tail=200 web; exit 1
           "

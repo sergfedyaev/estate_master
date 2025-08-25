@@ -41,17 +41,15 @@ jobs:
 
       - name: Rebuild & restart with Docker Compose
         run: |
-          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" '
+          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
             set -euxo pipefail
-            cd "$DEPLOY_DIR"
+            cd ${DEPLOY_DIR}
 
-            # если вдруг строка env_file: .env осталась в compose — уберём
-            sed -i "/^ *env_file: *.env$/d" docker-compose.yml || true
+            sed -i '/env_file: .env/d' docker-compose.yml || true
 
-            # .env.prod должен быть на сервере (мы его больше не удаляем rsync-ом)
-            [ -f .env.prod ] || { echo "::error::.env.prod missing in $DEPLOY_DIR"; exit 1; }
+            [ -f .env.prod ] || { echo '::error::.env.prod missing'; exit 1; }
 
             docker compose --env-file .env.prod down || true
             docker compose --env-file .env.prod up -d --build
             docker compose --env-file .env.prod ps
-          '
+          "

@@ -5,6 +5,7 @@ on:
     branches: [ main ]
   workflow_dispatch: {}
 
+# чтобы несколько запусков не ехали параллельно
 concurrency:
   group: deploy-main
   cancel-in-progress: true
@@ -16,36 +17,36 @@ jobs:
   deploy:
     runs-on: ubuntu-24.04
     env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}       # lokipaw.com
-      SSH_PORT: ${{ secrets.SSH_PORT }}       # 22022
-      SSH_USER: ${{ secrets.SSH_USER }}       # feda
-      DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}   # /home/feda/docker/estate_master
+      SSH_HOST: ${{ secrets.SSH_HOST }}      # lokipaw.com
+      SSH_PORT: ${{ secrets.SSH_PORT }}      # 22022
+      SSH_USER: ${{ secrets.SSH_USER }}      # feda
+      DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}  # /home/feda/docker/estate_master
     steps:
       - uses: actions/checkout@v4
 
       - name: Load SSH key
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}  # приватный ключ с Мака (пара к тому pub, что в authorized_keys)
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Ensure target dir exists
-        run: |
-          ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_DIR'"
+      - name: Make sure target dir exists
+        run: ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_DIR'"
 
-      - name: Rsync sources
-        env:
-          RSYNC_EXCLUDES: "--exclude .git/ --exclude pgdata/ --exclude media/ --exclude staticfiles/"
+      - name: Rsync sources to server (keep .env files)
         run: |
-          rsync -az --delete $RSYNC_EXCLUDES \
+          rsync -az --delete \
+            --exclude .git/ \
+            --exclude pgdata/ \
+            --exclude media/ \
+            --exclude staticfiles/ \
             -e "ssh -p $SSH_PORT -o StrictHostKeyChecking=no" \
             ./ "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/"
 
-      - name: Rebuild & restart
+      - name: Rebuild & restart with Docker Compose
         run: |
           ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "
-            set -euo pipefail
+            set -e
             cd '$DEPLOY_DIR'
-            test -f .env.prod || { echo '.env.prod missing'; exit 1; }
             docker compose --env-file .env.prod down || true
             docker compose --env-file .env.prod up -d --build
             docker compose --env-file .env.prod ps
